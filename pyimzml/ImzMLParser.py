@@ -27,11 +27,22 @@ import numpy as np
 
 from pyimzml.metadata import Metadata, SpectrumData
 from pyimzml.ontology.ontology import convert_cv_param
+from pyimzml.compression import ZlibCompression, NoCompression
 
-PRECISION_DICT = {"32-bit float": 'f', "64-bit float": 'd', "32-bit integer": 'i', "64-bit integer": 'l'}
-SIZE_DICT = {'f': 4, 'd': 8, 'i': 4, 'l': 8}
+PRECISION_DICT = {
+    "32-bit float": "f",
+    "64-bit float": "d",
+    "32-bit integer": "i",
+    "64-bit integer": "l",
+}
+SIZE_DICT = {"f": 4, "d": 8, "i": 4, "l": 8}
 INFER_IBD_FROM_IMZML = object()
 XMLNS_PREFIX = "{http://psi.hupo.org/ms/mzml}"
+
+COMPRESSION_DICT = {
+    "zlib compression": ZlibCompression(),
+    "no compression": NoCompression(),
+}
 
 param_group_elname = "referenceableParamGroup"
 data_processing_elname = "dataProcessing"
@@ -39,9 +50,9 @@ instrument_confid_elname = "instrumentConfiguration"
 
 
 def choose_iterparse(parse_lib=None):
-    if parse_lib == 'ElementTree':
+    if parse_lib == "ElementTree":
         from xml.etree.ElementTree import iterparse
-    elif parse_lib == 'lxml':
+    elif parse_lib == "lxml":
         from lxml.etree import iterparse
     else:
         from xml.etree.ElementTree import iterparse
@@ -49,12 +60,12 @@ def choose_iterparse(parse_lib=None):
 
 
 def _get_cv_param(elem, accession, deep=False, convert=False):
-    base = './/' if deep else ''
+    base = ".//" if deep else ""
     node = elem.find('%s%scvParam[@accession="%s"]' % (base, XMLNS_PREFIX, accession))
     if node is not None:
         if convert:
-            return convert_cv_param(accession, node.get('value'))
-        return node.get('value')
+            return convert_cv_param(accession, node.get("value"))
+        return node.get("value")
 
 
 def calc_mzs_digitize(mzs: np.ndarray) -> Counter:
@@ -104,11 +115,11 @@ class ImzMLParser:
     """
 
     def __init__(
-            self,
-            filename,
-            parse_lib=None,
-            ibd_file=INFER_IBD_FROM_IMZML,
-            include_spectra_metadata=None,
+        self,
+        filename,
+        parse_lib=None,
+        ibd_file=INFER_IBD_FROM_IMZML,
+        include_spectra_metadata=None,
     ):
         """
         Opens the two files corresponding to the file name, reads the entire .imzML
@@ -138,6 +149,7 @@ class ImzMLParser:
         self.sl = "{http://psi.hupo.org/ms/mzml}"
         # maps each imzML number format to its struct equivalent
         self.precisionDict = dict(PRECISION_DICT)
+        self.compressionDict = dict(COMPRESSION_DICT)
         # maps each number format character to its amount of bytes used
         self.sizeDict = dict(SIZE_DICT)
         self.filename = filename
@@ -145,21 +157,24 @@ class ImzMLParser:
         self.intensityOffsets = []
         self.mzLengths = []
         self.intensityLengths = []
+        self.mzEncodedLengths = []
+        self.intensityEncodedLengths = []
         # list of all (x,y,z) coordinates as tuples.
         self.coordinates = []
         self.root = None
         self.metadata = None
         self.polarity = None
         self.spectrum_mode = None
-        if include_spectra_metadata == 'full':
+        if include_spectra_metadata == "full":
             self.spectrum_full_metadata = []
         elif include_spectra_metadata is not None:
             include_spectra_metadata = set(include_spectra_metadata)
-            self.spectrum_metadata_fields = {
-                k: [] for k in include_spectra_metadata
-            }
+            self.spectrum_metadata_fields = {k: [] for k in include_spectra_metadata}
 
-        self.mzGroupId = self.intGroupId = self.mzPrecision = self.intensityPrecision = None
+        self.mzGroupId = self.intGroupId = None
+        self.mzPrecision = self.intensityPrecision = None
+        self.mzCompression = self.intensityCompression = None
+
         self.iterparse = choose_iterparse(parse_lib)
         self.__iter_read_spectrum_meta(include_spectra_metadata)
         if ibd_file is INFER_IBD_FROM_IMZML:
@@ -172,13 +187,18 @@ class ImzMLParser:
         # Dict for basic imzML metadata other than those required for reading
         # spectra. See method __readimzmlmeta()
         self.imzmldict = self.__readimzmlmeta()
-        self.imzmldict['max count of pixels z'] = np.asarray(self.coordinates)[:,2].max()
+        self.imzmldict["max count of pixels z"] = np.asarray(self.coordinates)[
+            :, 2
+        ].max()
 
     @staticmethod
     def _infer_bin_filename(imzml_path):
         imzml_path = Path(imzml_path)
-        ibd_path = [f for f in imzml_path.parent.glob('*')
-                    if re.match(r'.+\.ibd', str(f), re.IGNORECASE) and f.stem == imzml_path.stem][0]
+        ibd_path = [
+            f
+            for f in imzml_path.parent.glob("*")
+            if re.match(r".+\.ibd", str(f), re.IGNORECASE) and f.stem == imzml_path.stem
+        ][0]
         return str(ibd_path)
 
     # system method for use of 'with ... as'
@@ -228,7 +248,7 @@ class ImzMLParser:
         def fix(array):
             fixed = []
             delta = 0
-            prev_value = float('nan')
+            prev_value = float("nan")
             for value in array:
                 if value < 0 and prev_value >= 0:
                     delta += 2**32
@@ -242,46 +262,64 @@ class ImzMLParser:
     def __process_metadata(self):
         if self.metadata is None:
             self.metadata = Metadata(self.root)
-            for param_id, param_group in self.metadata.referenceable_param_groups.items():
-                if 'm/z array' in param_group.param_by_name:
+            for (
+                param_id,
+                param_group,
+            ) in self.metadata.referenceable_param_groups.items():
+                if "m/z array" in param_group.param_by_name:
                     self.mzGroupId = param_id
                     for name, dtype in self.precisionDict.items():
                         if name in param_group.param_by_name:
                             self.mzPrecision = dtype
-                if 'intensity array' in param_group.param_by_name:
+                    for name, compression in self.compressionDict.items():
+                        if name in param_group.param_by_name:
+                            self.mzCompression = compression
+                if "intensity array" in param_group.param_by_name:
                     self.intGroupId = param_id
                     for name, dtype in self.precisionDict.items():
                         if name in param_group.param_by_name:
                             self.intensityPrecision = dtype
-            if not hasattr(self, 'mzPrecision'):
+                    for name, compression in self.compressionDict.items():
+                        if name in param_group.param_by_name:
+                            self.intensityCompression = compression
+            if not hasattr(self, "mzPrecision"):
                 raise RuntimeError("Could not determine m/z precision")
-            if not hasattr(self, 'intensityPrecision'):
+            if not hasattr(self, "intensityPrecision"):
                 raise RuntimeError("Could not determine intensity precision")
+            if not hasattr(self, "mzCompression"):
+                self.mzCompression = NoCompression()
+            if not hasattr(self, "intensityCompression"):
+                self.intensityCompression = NoCompression()
 
     def __process_spectrum(self, elem, include_spectra_metadata):
-        arrlistelem = elem.find('%sbinaryDataArrayList' % self.sl)
+        arrlistelem = elem.find("%sbinaryDataArrayList" % self.sl)
         mz_group = None
         int_group = None
         for e in arrlistelem:
-            ref = e.find('%sreferenceableParamGroupRef' % self.sl).attrib["ref"]
+            ref = e.find("%sreferenceableParamGroupRef" % self.sl).attrib["ref"]
             if ref == self.mzGroupId:
                 mz_group = e
             elif ref == self.intGroupId:
                 int_group = e
-        self.mzOffsets.append(int(_get_cv_param(mz_group, 'IMS:1000102')))
-        self.mzLengths.append(int(_get_cv_param(mz_group, 'IMS:1000103')))
-        self.intensityOffsets.append(int(_get_cv_param(int_group, 'IMS:1000102')))
-        self.intensityLengths.append(int(_get_cv_param(int_group, 'IMS:1000103')))
-        scan_elem = elem.find('%sscanList/%sscan' % (self.sl, self.sl))
-        x = _get_cv_param(scan_elem, 'IMS:1000050')
-        y = _get_cv_param(scan_elem, 'IMS:1000051')
-        z = _get_cv_param(scan_elem, 'IMS:1000052')
+        self.mzOffsets.append(int(_get_cv_param(mz_group, "IMS:1000102")))
+        self.mzLengths.append(int(_get_cv_param(mz_group, "IMS:1000103")))
+        self.mzEncodedLengths.append(int(_get_cv_param(mz_group, "IMS:1000104")))
+
+        self.intensityOffsets.append(int(_get_cv_param(int_group, "IMS:1000102")))
+        self.intensityLengths.append(int(_get_cv_param(int_group, "IMS:1000103")))
+        self.intensityEncodedLengths.append(
+            int(_get_cv_param(int_group, "IMS:1000104"))
+        )
+        scan_elem = elem.find("%sscanList/%sscan" % (self.sl, self.sl))
+        x = _get_cv_param(scan_elem, "IMS:1000050")
+        y = _get_cv_param(scan_elem, "IMS:1000051")
+        z = _get_cv_param(scan_elem, "IMS:1000052")
         if z is not None:
             self.coordinates.append((int(x), int(y), int(z)))
         else:
             self.coordinates.append((int(x), int(y), 1))
 
-        if include_spectra_metadata == 'full':
+        if include_spectra_metadata == "full":
             self.spectrum_full_metadata.append(
                 SpectrumData(elem, self.metadata.referenceable_param_groups)
             )
@@ -299,19 +337,19 @@ class ImzMLParser:
         param_groups = self.metadata.referenceable_param_groups.values()
         spectrum_metadata = SpectrumData(elem, self.metadata.referenceable_param_groups)
         has_positive = (
-            any('positive scan' in group for group in param_groups)
-            or 'positive scan' in spectrum_metadata
+            any("positive scan" in group for group in param_groups)
+            or "positive scan" in spectrum_metadata
         )
         has_negative = (
-            any('negative scan' in group for group in param_groups)
-            or 'negative scan' in spectrum_metadata
+            any("negative scan" in group for group in param_groups)
+            or "negative scan" in spectrum_metadata
         )
         if has_positive and has_negative:
-            self.polarity = 'mixed'
+            self.polarity = "mixed"
         elif has_positive:
-            self.polarity = 'positive'
+            self.polarity = "positive"
         elif has_negative:
-            self.polarity = 'negative'
+            self.polarity = "negative"
 
     def __read_spectrum_mode(self, elem):
         """
@@ -325,18 +363,18 @@ class ImzMLParser:
         spectrum_metadata = SpectrumData(elem, self.metadata.referenceable_param_groups)
 
         profile_mode = (
-            any('profile spectrum' in group for group in param_groups)
-            or 'profile spectrum' in spectrum_metadata
+            any("profile spectrum" in group for group in param_groups)
+            or "profile spectrum" in spectrum_metadata
         )
         centroid_mode = (
-            any('centroid spectrum' in group for group in param_groups)
-            or 'centroid spectrum' in spectrum_metadata
+            any("centroid spectrum" in group for group in param_groups)
+            or "centroid spectrum" in spectrum_metadata
         )
 
         if profile_mode:
-            self.spectrum_mode = 'profile'
+            self.spectrum_mode = "profile"
         elif centroid_mode:
-            self.spectrum_mode = 'centroid'
+            self.spectrum_mode = "centroid"
 
     def __readimzmlmeta(self):
         """
@@ -354,8 +392,10 @@ class ImzMLParser:
             if an xml attribute has a number format different from the imzML specification
         """
         d = {}
-        scan_settings_list_elem = self.root.find('%sscanSettingsList' % self.sl)
-        instrument_config_list_elem = self.root.find('%sinstrumentConfigurationList' % self.sl)
+        scan_settings_list_elem = self.root.find("%sscanSettingsList" % self.sl)
+        instrument_config_list_elem = self.root.find(
+            "%sinstrumentConfigurationList" % self.sl
+        )
         scan_settings_params = [
             ("max count of pixels x", "IMS:1000042"),
             ("max count of pixels y", "IMS:1000043"),
@@ -376,19 +416,31 @@ class ImzMLParser:
 
         for name, accession in scan_settings_params:
             try:
-                val = _get_cv_param(scan_settings_list_elem, accession, deep=True, convert=True)
+                val = _get_cv_param(
+                    scan_settings_list_elem, accession, deep=True, convert=True
+                )
                 if val is not None:
                     d[name] = val
             except ValueError:
-                warn(Warning('Wrong data type in XML file. Skipped attribute "%s"' % name))
+                warn(
+                    Warning(
+                        'Wrong data type in XML file. Skipped attribute "%s"' % name
+                    )
+                )
 
         for name, accession in instrument_config_params:
             try:
-                val = _get_cv_param(instrument_config_list_elem, accession, deep=True, convert=True)
+                val = _get_cv_param(
+                    instrument_config_list_elem, accession, deep=True, convert=True
+                )
                 if val is not None:
                     d[name] = val
             except ValueError:
-                warn(Warning('Wrong data type in XML file. Skipped attribute "%s"' % name))
+                warn(
+                    Warning(
+                        'Wrong data type in XML file. Skipped attribute "%s"' % name
+                    )
+                )
         return d
 
     def get_physical_coordinates(self, i):
@@ -428,6 +480,8 @@ class ImzMLParser:
         mz_bytes, intensity_bytes = self.get_spectrum_as_string(index)
         mz_array = np.frombuffer(mz_bytes, dtype=self.mzPrecision)
         intensity_array = np.frombuffer(intensity_bytes, dtype=self.intensityPrecision)
+        assert len(intensity_array) == self.intensityLengths[index]
+        assert len(mz_array) == self.mzLengths[index]
         return mz_array, intensity_array
 
     def get_spectrum_as_string(self, index):
@@ -449,15 +503,16 @@ class ImzMLParser:
             string where each character represents a byte of the intensity array of
             the spectrum
         """
-        offsets = [self.mzOffsets[index], self.intensityOffsets[index]]
-        lengths = [self.mzLengths[index], self.intensityLengths[index]]
-        lengths[0] *= self.sizeDict[self.mzPrecision]
-        lengths[1] *= self.sizeDict[self.intensityPrecision]
-        self.m.seek(offsets[0])
-        mz_string = self.m.read(lengths[0])
-        self.m.seek(offsets[1])
-        intensity_string = self.m.read(lengths[1])
-        return mz_string, intensity_string
+
+        self.m.seek(self.mzOffsets[index])
+        mz_string = self.m.read(self.mzEncodedLengths[index])
+
+        self.m.seek(self.intensityOffsets[index])
+        intensity_string = self.m.read(self.intensityEncodedLengths[index])
+
+        return self.mzCompression.decompress(
+            mz_string
+        ), self.intensityCompression.decompress(intensity_string)
 
     def portable_spectrum_reader(self):
         """
@@ -467,9 +522,17 @@ class ImzMLParser:
         The PortableSpectrumReader can be safely pickled and unpickled, making it useful for reading the spectra
         in a distributed environment such as PySpark or PyWren.
         """
-        return PortableSpectrumReader(self.coordinates,
-                                      self.mzPrecision, self.mzOffsets, self.mzLengths,
-                                      self.intensityPrecision, self.intensityOffsets, self.intensityLengths)
+        return PortableSpectrumReader(
+            self.coordinates,
+            self.mzPrecision,
+            self.mzOffsets,
+            self.mzEncodedLengths,
+            self.mzCompression,
+            self.intensityPrecision,
+            self.intensityOffsets,
+            self.intensityEncodedLengths,
+            self.intensityCompression,
+        )
 
     def check_peaks_overlap(self, n_spectrum: int = 100, ppm: float = 3.0) -> float:
         """
@@ -481,10 +544,12 @@ class ImzMLParser:
         https://www.biorxiv.org/content/10.1101/2023.05.29.542736v2
         """
         random.seed(42)
-        indexes = set([
-            random.randrange(0, len(self.coordinates))
-            for _ in range(min(len(self.coordinates), n_spectrum))
-        ])
+        indexes = set(
+            [
+                random.randrange(0, len(self.coordinates))
+                for _ in range(min(len(self.coordinates), n_spectrum))
+            ]
+        )
 
         n_overlap_peaks = []
         non_zero_peaks = []
@@ -512,20 +577,30 @@ class ImzMLParser:
             return {}
         else:
             return {
-                'mzs_min': mzs.min(),
-                'mzs_max': mzs.max(),
-                'mzs_digitized': calc_mzs_digitize(mzs),
-                'ints_min': nonzero_ints.min() if len(nonzero_ints) > 0 else 0,  # non zero
-                'ints_50p': np.percentile(nonzero_ints, 50) if len(nonzero_ints) > 0 else 0,
-                'ints_95p': np.percentile(nonzero_ints, 95) if len(nonzero_ints) > 0 else 0,
-                'ints_99p': np.percentile(nonzero_ints, 99) if len(nonzero_ints) > 0 else 0,
-                'ints_max': ints.max(),
-                'ints_total': sum(ints),
-                'nonzero_intensity_peaks_count': len(nonzero_ints),
-                'total_peaks_count': len(ints),
+                "mzs_min": mzs.min(),
+                "mzs_max": mzs.max(),
+                "mzs_digitized": calc_mzs_digitize(mzs),
+                "ints_min": nonzero_ints.min()
+                if len(nonzero_ints) > 0
+                else 0,  # non zero
+                "ints_50p": np.percentile(nonzero_ints, 50)
+                if len(nonzero_ints) > 0
+                else 0,
+                "ints_95p": np.percentile(nonzero_ints, 95)
+                if len(nonzero_ints) > 0
+                else 0,
+                "ints_99p": np.percentile(nonzero_ints, 99)
+                if len(nonzero_ints) > 0
+                else 0,
+                "ints_max": ints.max(),
+                "ints_total": sum(ints),
+                "nonzero_intensity_peaks_count": len(nonzero_ints),
+                "total_peaks_count": len(ints),
             }
 
-    def calc_statistics(self, n_spectrum: int = 0, full: bool = False) -> Dict[str, Any]:
+    def calc_statistics(
+        self, n_spectrum: int = 0, full: bool = False
+    ) -> Dict[str, Any]:
         """
         Calculate the statistics of the number of peaks for the entire dataset,
         as well as full/n_spectrum is setting up - calculate extended statistics for each spectrum
@@ -534,11 +609,11 @@ class ImzMLParser:
         :param full: analysis of all spectrum
         """
         peaks_statistics = {
-            'ds_peaks_stats': {
-                'min': min(self.intensityLengths),
-                'median': int(np.median(self.intensityLengths)),
-                '95p': int(np.percentile(self.intensityLengths, q=95)),
-                'max': max(self.intensityLengths),
+            "ds_peaks_stats": {
+                "min": min(self.intensityLengths),
+                "median": int(np.median(self.intensityLengths)),
+                "95p": int(np.percentile(self.intensityLengths, q=95)),
+                "max": max(self.intensityLengths),
             }
         }
 
@@ -547,10 +622,12 @@ class ImzMLParser:
             indexes = list(range(len(self.coordinates)))
         elif n_spectrum:
             random.seed(42)
-            indexes = set([
-                random.randrange(0, len(self.coordinates))
-                for _ in range(min(len(self.coordinates), n_spectrum))
-            ])
+            indexes = set(
+                [
+                    random.randrange(0, len(self.coordinates))
+                    for _ in range(min(len(self.coordinates), n_spectrum))
+                ]
+            )
         else:
             indexes = []
 
@@ -564,34 +641,44 @@ class ImzMLParser:
                 spectrum_stats = self.get_spectrum_statistics(idx)
                 if not spectrum_stats:
                     continue
-                mzs_min.append(spectrum_stats['mzs_min'])
-                mzs_max.append(spectrum_stats['mzs_max'])
-                mzs_digitized += spectrum_stats['mzs_digitized']
-                ints_min.append(spectrum_stats['ints_min'])
-                ints_50p.append(spectrum_stats['ints_50p'])
-                ints_95p.append(spectrum_stats['ints_95p'])
-                ints_99p.append(spectrum_stats['ints_99p'])
-                ints_max.append(spectrum_stats['ints_max'])
-                ints_total.append(spectrum_stats['ints_total'])
-                nonzero_intensity_peaks_count.append(spectrum_stats['nonzero_intensity_peaks_count'])
-                total_peaks_count.append(spectrum_stats['total_peaks_count'])
+                mzs_min.append(spectrum_stats["mzs_min"])
+                mzs_max.append(spectrum_stats["mzs_max"])
+                mzs_digitized += spectrum_stats["mzs_digitized"]
+                ints_min.append(spectrum_stats["ints_min"])
+                ints_50p.append(spectrum_stats["ints_50p"])
+                ints_95p.append(spectrum_stats["ints_95p"])
+                ints_99p.append(spectrum_stats["ints_99p"])
+                ints_max.append(spectrum_stats["ints_max"])
+                ints_total.append(spectrum_stats["ints_total"])
+                nonzero_intensity_peaks_count.append(
+                    spectrum_stats["nonzero_intensity_peaks_count"]
+                )
+                total_peaks_count.append(spectrum_stats["total_peaks_count"])
 
-            peaks_statistics.update({
-                'mz_min': min(mzs_min),
-                'mz_max': max(mzs_max),
-                'mzs_min': np.array(mzs_min, dtype=np.float32),
-                'mzs_max': np.array(mzs_max, dtype=np.float32),
-                'mzs_digitized': mzs_digitized,
-                'ints_min': np.array(ints_min, dtype=np.float32),
-                'ints_50p': np.array(ints_50p, dtype=np.float32),
-                'ints_95p': np.array(ints_95p, dtype=np.float32),
-                'ints_99p': np.array(ints_99p, dtype=np.float32),
-                'ints_max': np.array(ints_max, dtype=np.float32),
-                'ints_total': np.array(ints_total, dtype=np.float32),
-                'nonzero_intensity_lengths': np.array(nonzero_intensity_peaks_count, dtype=np.int32),
-                'nonzero_peaks_percentage':
-                    round(sum(nonzero_intensity_peaks_count)/sum(total_peaks_count) * 100.0, 2),
-            })
+            peaks_statistics.update(
+                {
+                    "mz_min": min(mzs_min),
+                    "mz_max": max(mzs_max),
+                    "mzs_min": np.array(mzs_min, dtype=np.float32),
+                    "mzs_max": np.array(mzs_max, dtype=np.float32),
+                    "mzs_digitized": mzs_digitized,
+                    "ints_min": np.array(ints_min, dtype=np.float32),
+                    "ints_50p": np.array(ints_50p, dtype=np.float32),
+                    "ints_95p": np.array(ints_95p, dtype=np.float32),
+                    "ints_99p": np.array(ints_99p, dtype=np.float32),
+                    "ints_max": np.array(ints_max, dtype=np.float32),
+                    "ints_total": np.array(ints_total, dtype=np.float32),
+                    "nonzero_intensity_lengths": np.array(
+                        nonzero_intensity_peaks_count, dtype=np.int32
+                    ),
+                    "nonzero_peaks_percentage": round(
+                        sum(nonzero_intensity_peaks_count)
+                        / sum(total_peaks_count)
+                        * 100.0,
+                        2,
+                    ),
+                }
+            )
 
         return peaks_statistics
 
@@ -621,14 +708,18 @@ def getionimage(p, mz_value, tol=0.1, z=1, reduce_func=sum):
         pixel. Can be easily plotted with matplotlib
     """
     tol = abs(tol)
-    im = np.zeros((p.imzmldict["max count of pixels y"], p.imzmldict["max count of pixels x"]))
+    im = np.zeros(
+        (p.imzmldict["max count of pixels y"], p.imzmldict["max count of pixels x"])
+    )
     for i, (x, y, z_) in enumerate(p.coordinates):
         if z_ == 0:
-            UserWarning("z coordinate = 0 present, if you're getting blank images set getionimage(.., .., z=0)")
+            UserWarning(
+                "z coordinate = 0 present, if you're getting blank images set getionimage(.., .., z=0)"
+            )
         if z_ == z:
             mzs, ints = map(lambda x: np.asarray(x), p.getspectrum(i))
             min_i, max_i = _bisect_spectrum(mzs, mz_value, tol)
-            im[y - 1, x - 1] = reduce_func(ints[min_i:max_i+1])
+            im[y - 1, x - 1] = reduce_func(ints[min_i : max_i + 1])
     return im
 
 
@@ -712,7 +803,9 @@ class _SpectrumMetaDataBrowser(object):
             raise ValueError("Unsupported element: " + str(element))
 
     def _find_referenceable_param_groups(self):
-        param_group_refs = self._spectrum.findall("%sreferenceableParamGroupRef" % self._sl)
+        param_group_refs = self._spectrum.findall(
+            "%sreferenceableParamGroupRef" % self._sl
+        )
         ids = map(lambda g: g.attrib["ref"], param_group_refs)
         return ids
 
@@ -735,7 +828,9 @@ class _SpectrumMetaDataBrowser(object):
         try:
             return self._spectrum.attrib["dataProcessingRef"]
         except KeyError as _:
-            spectrum_list = self._root.find("%srun/%sspectrumList" % tuple(2 * [self._sl]))
+            spectrum_list = self._root.find(
+                "%srun/%sspectrumList" % tuple(2 * [self._sl])
+            )
             try:
                 return [spectrum_list.attrib["defaultDataProcessingRef"]]
             except KeyError as _:
@@ -748,15 +843,27 @@ class PortableSpectrumReader(object):
     without holding any references to open files that wouldn't survive pickling.
     """
 
-    def __init__(self, coordinates, mzPrecision, mzOffsets, mzLengths,
-                 intensityPrecision, intensityOffsets, intensityLengths):
+    def __init__(
+        self,
+        coordinates,
+        mzPrecision,
+        mzOffsets,
+        mzLengths,
+        mzCompression,
+        intensityPrecision,
+        intensityOffsets,
+        intensityLengths,
+        intensityCompression,
+    ):
         self.coordinates = coordinates
         self.mzPrecision = mzPrecision
         self.mzOffsets = mzOffsets
         self.mzLengths = mzLengths
+        self.mzCompression = mzCompression
         self.intensityPrecision = intensityPrecision
         self.intensityOffsets = intensityOffsets
         self.intensityLengths = intensityLengths
+        self.intensityCompression = intensityCompression
 
     def read_spectrum_from_file(self, file, index):
         """
@@ -776,9 +883,11 @@ class PortableSpectrumReader(object):
             Sequence of intensity values corresponding to mz_array
         """
         file.seek(self.mzOffsets[index])
-        mz_bytes = file.read(self.mzLengths[index] * SIZE_DICT[self.mzPrecision])
+        mz_bytes = self.mzCompression.decompress(file.read(self.mzLengths[index]))
         file.seek(self.intensityOffsets[index])
-        intensity_bytes = file.read(self.intensityLengths[index] * SIZE_DICT[self.intensityPrecision])
+        intensity_bytes = self.intensityCompression.decompress(
+            file.read(self.intensityLengths[index])
+        )
 
         mz_array = np.frombuffer(mz_bytes, dtype=self.mzPrecision)
         intensity_array = np.frombuffer(intensity_bytes, dtype=self.intensityPrecision)
