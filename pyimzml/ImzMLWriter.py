@@ -17,8 +17,9 @@ IMZML_TEMPLATE = """\
 <?xml version="1.0" encoding="ISO-8859-1"?>
 <mzML xmlns="http://psi.hupo.org/ms/mzml" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://psi.hupo.org/ms/mzml http://psidev.info/files/ms/mzML/xsd/mzML1.1.0_idx.xsd" version="1.1">
   <cvList count="2">
-    <cv uri="http://psidev.cvs.sourceforge.net/*checkout*/psidev/psi/psi-ms/mzML/controlledVocabulary/psi-ms.obo" fullName="Proteomics Standards Initiative Mass Spectrometry Ontology" id="MS" version="3.65.0"/>
-    <cv uri="http://obo.cvs.sourceforge.net/*checkout*/obo/obo/ontology/phenotype/unit.obo" fullName="Unit Ontology" id="UO" version="12:10:2011"/>
+    <cv URI="http://psidev.cvs.sourceforge.net/*checkout*/psidev/psi/psi-ms/mzML/controlledVocabulary/psi-ms.obo" fullName="Proteomics Standards Initiative Mass Spectrometry Ontology" id="MS" version="3.65.0"/>
+    <cv URI="http://obo.cvs.sourceforge.net/*checkout*/obo/obo/ontology/phenotype/unit.obo" fullName="Unit Ontology" id="UO" version="12:10:2011"/>
+    <cv URI="https://github.com/imzML/imzML/blob/master/imagingMS.obo" fullName="A common data format for mass spectrometry imaging" id="IMS" version="1.1.0"/>
   </cvList>
 
   <fileDescription>
@@ -197,7 +198,7 @@ class ImzMLWriter(object):
         spec_type="centroid",
         scan_direction="top_down",
         line_scan_direction="line_left_right",
-        scan_pattern="one_way",
+        scan_pattern="flyby",
         scan_type="horizontal_line",
         mz_compression=NoCompression(),
         intensity_compression=NoCompression(),
@@ -280,7 +281,7 @@ class ImzMLWriter(object):
             "right_left": "1000403",
             "top_down": "1000401",
             "meandering": "1000410",
-            "one_way": "1000411",
+            "flyby": "1000413",
             "random_access": "1000412",
             "horizontal_line": "1000480",
             "vertical_line": "1000481",
@@ -295,7 +296,7 @@ class ImzMLWriter(object):
             "right_left": "right left",
             "top_down": "top down",
             "meandering": "meandering",
-            "one_way": "one way",
+            "flyby": "flyby",
             "random_access": "random access",
             "horizontal_line": "horizontal line scan",
             "vertical_line": "vertical line scan",
