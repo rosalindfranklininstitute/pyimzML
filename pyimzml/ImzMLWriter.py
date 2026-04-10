@@ -147,45 +147,62 @@ IMZML_TEMPLATE = """\
 </mzML>
 """
 
+
 class _MaxlenDict(OrderedDict):
     def __init__(self, *args, **kwargs):
-        self.maxlen = kwargs.pop('maxlen', None)
+        self.maxlen = kwargs.pop("maxlen", None)
         OrderedDict.__init__(self, *args, **kwargs)
 
     def __setitem__(self, key, value):
         if self.maxlen is not None and len(self) >= self.maxlen:
-            self.popitem(0) #pop oldest
+            self.popitem(0)  # pop oldest
         OrderedDict.__setitem__(self, key, value)
 
-_Spectrum = namedtuple('_Spectrum', 'coords mz_len mz_offset mz_enc_len int_len int_offset int_enc_len mz_min mz_max mz_base int_base int_tic userParams') #todo: change named tuple to dict and parse xml template properly (i.e. remove hardcoding so parameters can be optional)
+
+_Spectrum = namedtuple(
+    "_Spectrum",
+    "coords mz_len mz_offset mz_enc_len int_len int_offset int_enc_len mz_min mz_max mz_base int_base int_tic userParams",
+)  # todo: change named tuple to dict and parse xml template properly (i.e. remove hardcoding so parameters can be optional)
+
 
 class ImzMLWriter(object):
     """
-        Create an imzML+ibd file.
+    Create an imzML+ibd file.
 
-        :param output_filename:
-            is used to make the base name by removing the extension (if any).
-            two files will be made by adding ".ibd" and ".imzML" to the base name
-        :param intensity_dtype:
-            The numpy data type to use for saving intensity values
-        :param mz_dtype:
-            The numpy data type to use for saving mz array values
-        :param mode:
+    :param output_filename:
+        is used to make the base name by removing the extension (if any).
+        two files will be made by adding ".ibd" and ".imzML" to the base name
+    :param intensity_dtype:
+        The numpy data type to use for saving intensity values
+    :param mz_dtype:
+        The numpy data type to use for saving mz array values
+    :param mode:
 
-            * "continuous" mode will save the first mz array only
-            * "processed" mode save every mz array separately
-            * "auto" mode writes only mz arrays that have not already been written
-        :param intensity_compression:
-            How to compress the intensity data before saving
-            must be an instance of :class:`~pyimzml.compression.NoCompression` or :class:`~pyimzml.compression.ZlibCompression`
-        :param mz_compression:
-            How to compress the mz array data before saving
+        * "continuous" mode will save the first mz array only
+        * "processed" mode save every mz array separately
+        * "auto" mode writes only mz arrays that have not already been written
+    :param intensity_compression:
+        How to compress the intensity data before saving
+        must be an instance of :class:`~pyimzml.compression.NoCompression` or :class:`~pyimzml.compression.ZlibCompression`
+    :param mz_compression:
+        How to compress the mz array data before saving
     """
-    def __init__(self, output_filename,
-                 mz_dtype=np.float64, intensity_dtype=np.float32, mode="auto", spec_type="centroid",
-                 scan_direction="top_down", line_scan_direction="line_left_right", scan_pattern="one_way", scan_type="horizontal_line", 
-                 mz_compression=NoCompression(), intensity_compression=NoCompression(),
-                 polarity=None):
+
+    def __init__(
+        self,
+        output_filename,
+        mz_dtype=np.float64,
+        intensity_dtype=np.float32,
+        mode="auto",
+        spec_type="centroid",
+        scan_direction="top_down",
+        line_scan_direction="line_left_right",
+        scan_pattern="one_way",
+        scan_type="horizontal_line",
+        mz_compression=NoCompression(),
+        intensity_compression=NoCompression(),
+        polarity=None,
+    ):
 
         self.mz_dtype = mz_dtype
         self.intensity_dtype = intensity_dtype
@@ -196,11 +213,11 @@ class ImzMLWriter(object):
         self.run_id = os.path.splitext(output_filename)[0]
         self.filename = self.run_id + ".imzML"
         self.ibd_filename = self.run_id + ".ibd"
-        self.xml = open(self.filename, 'w')
-        self.ibd = open(self.ibd_filename, 'wb+')
+        self.xml = open(self.filename, "w")
+        self.ibd = open(self.ibd_filename, "wb+")
         self.sha1 = hashlib.sha1()
         self.uuid = uuid.uuid4()
-        
+
         self.scan_direction = scan_direction
         self.scan_pattern = scan_pattern
         self.scan_type = scan_type
@@ -208,27 +225,35 @@ class ImzMLWriter(object):
 
         self._write_ibd(self.uuid.bytes)
 
-        self.wheezy_engine = Engine(loader=DictLoader({'imzml': IMZML_TEMPLATE}), extensions=[CoreExtension()])
-        self.imzml_template = self.wheezy_engine.get_template('imzml')
+        self.wheezy_engine = Engine(
+            loader=DictLoader({"imzml": IMZML_TEMPLATE}), extensions=[CoreExtension()]
+        )
+        self.imzml_template = self.wheezy_engine.get_template("imzml")
         self.spectra = []
         self.first_mz = None
         self.hashes = defaultdict(list)  # mz_hash -> list of mz_data (disk location)
-        self.lru_cache = _MaxlenDict(maxlen=10)  # mz_array (as tuple) -> mz_data (disk location)
+        self.lru_cache = _MaxlenDict(
+            maxlen=10
+        )  # mz_array (as tuple) -> mz_data (disk location)
         self._setPolarity(polarity)
 
     @staticmethod
     def _np_type_to_name(dtype):
-        if dtype.__name__.startswith('float'):
+        if dtype.__name__.startswith("float"):
             return "%s-bit float" % dtype.__name__[5:]
-        elif dtype.__name__.startswith('int'):
+        elif dtype.__name__.startswith("int"):
             return "%s-bit integer" % dtype.__name__[3:]
 
     def _setPolarity(self, polarity):
         if polarity:
-            if polarity.lower() in ['positive', 'negative']:
+            if polarity.lower() in ["positive", "negative"]:
                 self.polarity = polarity.lower()
             else:
-                raise ValueError('value for polarity must be one of "positive", "negative". Received: {}'.format(polarity))
+                raise ValueError(
+                    'value for polarity must be one of "positive", "negative". Received: {}'.format(
+                        polarity
+                    )
+                )
         else:
             self.polarity = ""
 
@@ -236,46 +261,50 @@ class ImzMLWriter(object):
         spectra = self.spectra
         mz_data_type = self._np_type_to_name(self.mz_dtype)
         int_data_type = self._np_type_to_name(self.intensity_dtype)
-        obo_codes = {"32-bit integer": "1000519", 
-                     "16-bit float": "1000520",
-                     "32-bit float": "1000521",
-                     "64-bit integer": "1000522",
-                     "64-bit float": "1000523",
-                     "continuous": "1000030",
-                     "processed": "1000031",
-                     "zlib compression": "1000574",
-                     "no compression": "1000576",
-                     "line_bottom_up": "1000492",
-                     "line_left_right": "1000491",
-                     "line_right_left": "1000490",
-                     "line_top_down": "1000493",
-                     "bottom_up": "1000400",
-                     "left_right": "1000402",
-                     "right_left": "1000403",
-                     "top_down": "1000401",
-                     "meandering": "1000410",
-                     "one_way": "1000411",
-                     "random_access": "1000412",
-                     "horizontal_line": "1000480",
-                     "vertical_line": "1000481"}
-        obo_names = {"line_bottom_up": "linescan bottom up",
-                     "line_left_right": "linescan left right",
-                     "line_right_left": "linescan right left",
-                     "line_top_down": "linescan top down",
-                     "bottom_up": "bottom up",
-                     "left_right": "left right",
-                     "right_left": "right left",
-                     "top_down": "top down",
-                     "meandering": "meandering",
-                     "one_way": "one way",
-                     "random_access": "random access",
-                     "horizontal_line": "horizontal line scan",
-                     "vertical_line": "vertical line scan"}
-        
+        obo_codes = {
+            "32-bit integer": "1000519",
+            "16-bit float": "1000520",
+            "32-bit float": "1000521",
+            "64-bit integer": "1000522",
+            "64-bit float": "1000523",
+            "continuous": "1000030",
+            "processed": "1000031",
+            "zlib compression": "1000574",
+            "no compression": "1000576",
+            "line_bottom_up": "1000492",
+            "line_left_right": "1000491",
+            "line_right_left": "1000490",
+            "line_top_down": "1000493",
+            "bottom_up": "1000400",
+            "left_right": "1000402",
+            "right_left": "1000403",
+            "top_down": "1000401",
+            "meandering": "1000410",
+            "one_way": "1000411",
+            "random_access": "1000412",
+            "horizontal_line": "1000480",
+            "vertical_line": "1000481",
+        }
+        obo_names = {
+            "line_bottom_up": "linescan bottom up",
+            "line_left_right": "linescan left right",
+            "line_right_left": "linescan right left",
+            "line_top_down": "linescan top down",
+            "bottom_up": "bottom up",
+            "left_right": "left right",
+            "right_left": "right left",
+            "top_down": "top down",
+            "meandering": "meandering",
+            "one_way": "one way",
+            "random_access": "random access",
+            "horizontal_line": "horizontal line scan",
+            "vertical_line": "vertical line scan",
+        }
+
         uuid = ("{%s}" % self.uuid).upper()
         sha1sum = self.sha1.hexdigest().upper()
         run_id = self.run_id
-        if self.mode == 'auto':
+        if self.mode == "auto":
             mode = "processed" if len(self.lru_cache) > 1 else "continuous"
         else:
             mode = self.mode
@@ -287,7 +316,7 @@ class ImzMLWriter(object):
         scan_pattern = self.scan_pattern
         scan_type = self.scan_type
         line_scan_direction = self.line_scan_direction
-        
+
         self.xml.write(self.imzml_template.render(locals()))
 
     def _write_ibd(self, bytes):
@@ -303,7 +332,7 @@ class ImzMLWriter(object):
         return offset, data.shape[0], self._write_ibd(bytes)
 
     def _read_mz(self, mz_offset, mz_len, mz_enc_len):
-        '''reads a mz array from the currently open ibd file'''
+        """reads a mz array from the currently open ibd file"""
         self.ibd.seek(mz_offset)
         data = self.ibd.read(mz_enc_len)
         self.ibd.seek(0, 2)
@@ -311,8 +340,8 @@ class ImzMLWriter(object):
         return tuple(np.fromstring(data, dtype=self.mz_dtype))
 
     def _get_previous_mz(self, mzs):
-        '''given an mz array, return the mz_data (disk location)
-        if the mz array was not previously written, write to disk first'''
+        """given an mz array, return the mz_data (disk location)
+        if the mz array was not previously written, write to disk first"""
         mzs = tuple(mzs)  # must be hashable
         if mzs in self.lru_cache:
             return self.lru_cache[mzs]
@@ -355,7 +384,9 @@ class ImzMLWriter(object):
 
         if self.mode == "continuous":
             if self.first_mz is None:
-                self.first_mz = self._encode_and_write(mzs, self.mz_dtype, self.mz_compression)
+                self.first_mz = self._encode_and_write(
+                    mzs, self.mz_dtype, self.mz_compression
+                )
             mz_data = self.first_mz
         elif self.mode == "processed":
             mz_data = self._encode_and_write(mzs, self.mz_dtype, self.mz_compression)
@@ -365,14 +396,30 @@ class ImzMLWriter(object):
             raise TypeError("Unknown mode: %s" % self.mode)
         mz_offset, mz_len, mz_enc_len = mz_data
 
-        int_offset, int_len, int_enc_len = self._encode_and_write(intensities, self.intensity_dtype, self.intensity_compression)
+        int_offset, int_len, int_enc_len = self._encode_and_write(
+            intensities, self.intensity_dtype, self.intensity_compression
+        )
         mz_min = np.min(mzs)
         mz_max = np.max(mzs)
         ix_max = np.argmax(intensities)
         mz_base = mzs[ix_max]
         int_base = intensities[ix_max]
         int_tic = np.sum(intensities)
-        s = _Spectrum(coords, mz_len, mz_offset, mz_enc_len, int_len, int_offset, int_enc_len, mz_min, mz_max, mz_base, int_base, int_tic, userParams)
+        s = _Spectrum(
+            coords,
+            mz_len,
+            mz_offset,
+            mz_enc_len,
+            int_len,
+            int_offset,
+            int_enc_len,
+            mz_min,
+            mz_max,
+            mz_base,
+            int_base,
+            int_tic,
+            userParams,
+        )
         self.spectra.append(s)
 
     def close(self):  # 'close' is a more common use for this
@@ -383,7 +430,7 @@ class ImzMLWriter(object):
         self.finish()
 
     def finish(self):
-        '''alias of close()'''
+        """alias of close()"""
         self.ibd.close()
         self._write_xml()
         self.xml.close()
@@ -398,31 +445,35 @@ class ImzMLWriter(object):
             self.ibd.close()
             self.xml.close()
 
+
 def _main(argv):
     from pyimzml.ImzMLParser import ImzMLParser
-    inputfile = ''
-    outputfile = ''
+
+    inputfile = ""
+    outputfile = ""
     try:
-        opts, args = getopt.getopt(argv,"hi:o:",["ifile=","ofile="])
+        opts, args = getopt.getopt(argv, "hi:o:", ["ifile=", "ofile="])
     except getopt.GetoptError:
-        print('test.py -i <inputfile> -o <outputfile>')
+        print("test.py -i <inputfile> -o <outputfile>")
         sys.exit(2)
     for opt, arg in opts:
-        if opt == '-h':
-            print('test.py -i <inputfile> -o <outputfile>')
+        if opt == "-h":
+            print("test.py -i <inputfile> -o <outputfile>")
             sys.exit()
         elif opt in ("-i", "--ifile"):
             inputfile = arg
         elif opt in ("-o", "--ofile"):
             outputfile = arg
-    if inputfile == '':
-        print('test.py -i <inputfile> -o <outputfile>')
-        raise IOError('input file not specified')
-    if outputfile=='':
-        outputfile=inputfile+'.imzML'
+    if inputfile == "":
+        print("test.py -i <inputfile> -o <outputfile>")
+        raise IOError("input file not specified")
+    if outputfile == "":
+        outputfile = inputfile + ".imzML"
     imzml = ImzMLParser(inputfile)
     spectra = []
-    with ImzMLWriter(outputfile, mz_dtype=np.float32, intensity_dtype=np.float32) as writer:
+    with ImzMLWriter(
+        outputfile, mz_dtype=np.float32, intensity_dtype=np.float32
+    ) as writer:
         for i, coords in enumerate(imzml.coordinates):
             mzs, intensities = imzml.getspectrum(i)
             writer.addSpectrum(mzs, intensities, coords)
@@ -436,5 +487,6 @@ def _main(argv):
 
     print(spectra[0] == spectra2[0])
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     _main(sys.argv[1:])

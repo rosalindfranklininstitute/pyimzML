@@ -11,18 +11,18 @@ all_terms.update(ms_terms)
 all_terms.update(ims_terms)
 
 DTYPE_MAPPING = {
-    'xsd:string': str,
-    'xsd:anyURI': str,
-    'xsd:float': float,
-    'xsd:double': float,
-    'xsd:decimal': float,
-    'xsd:nonNegativeFloat': float,
-    'xsd:int': int,
-    'xsd:integer': int,
-    'xsd:positiveInteger': int,
-    'xsd:nonNegativeInteger': int,
-    'xsd:boolean': bool,
-    'xsd:dateTime': datetime,
+    "xsd:string": str,
+    "xsd:anyURI": str,
+    "xsd:float": float,
+    "xsd:double": float,
+    "xsd:decimal": float,
+    "xsd:nonNegativeFloat": float,
+    "xsd:int": int,
+    "xsd:integer": int,
+    "xsd:positiveInteger": int,
+    "xsd:nonNegativeInteger": int,
+    "xsd:boolean": bool,
+    "xsd:dateTime": datetime,
 }
 
 ACCESSION_FIX_MAPPING = {
@@ -31,10 +31,10 @@ ACCESSION_FIX_MAPPING = {
     # of the known cases where the accession should be fixed, instead of the name.
     # (erroneous accession, name) -> fixed accession
     # Spectrum data types: https://github.com/alexandrovteam/pyimzML/pull/21#issuecomment-713818463
-    ('MS:1000523', '32-bit float'): 'MS:1000521',
-    ('MS:1000521', '64-bit float'): 'MS:1000523',
+    ("MS:1000523", "32-bit float"): "MS:1000521",
+    ("MS:1000521", "64-bit float"): "MS:1000523",
     # Polarity
-    ('MS:1000128', 'positive scan'): 'MS:1000130'
+    ("MS:1000128", "positive scan"): "MS:1000130",
 }
 
 
@@ -42,7 +42,7 @@ def convert_xml_value(dtype, value):
     try:
         if dtype is not None:
             return DTYPE_MAPPING[dtype](value)
-        elif value is None or value == '':
+        elif value is None or value == "":
             # Many cv_params are flags and have either a None or empty-string value.
             # Replace their value with True in these cases, so their existence isn't so ambiguous.
             return True
@@ -77,14 +77,18 @@ def lookup_and_convert_cv_param(accession, raw_name, value, unit_accession=None)
     unit_name = all_terms.get(unit_accession, (unit_accession, None))[0]
 
     if accession not in all_terms:
-        warn('Unrecognized accession in <cvParam>: %s (name: "%s").' % (accession, raw_name))
+        warn(
+            'Unrecognized accession in <cvParam>: %s (name: "%s").'
+            % (accession, raw_name)
+        )
     elif name != raw_name:
         fixed_accession = ACCESSION_FIX_MAPPING.get((accession, raw_name))
         if fixed_accession is not None:
             warn(
                 'Accession %s ("%s") found with mismatched name "%s". '
-                'This is a known bug with some imzML conversion software - using accession '
-                '%s ("%s") instead.' % (accession, name, raw_name, fixed_accession, raw_name)
+                "This is a known bug with some imzML conversion software - using accession "
+                '%s ("%s") instead.'
+                % (accession, name, raw_name, fixed_accession, raw_name)
             )
             accession = fixed_accession
             name = raw_name
@@ -95,6 +99,3 @@ def lookup_and_convert_cv_param(accession, raw_name, value, unit_accession=None)
             )
 
     return accession, name, converted_value, unit_name
-
-
-
